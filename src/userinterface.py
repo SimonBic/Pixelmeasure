@@ -44,9 +44,10 @@ import math
 from pathlib import Path
 from enum import Enum, auto
 
-from matplotlib import image
+
 from measurements import Region, polygon_measures, region_from_seed, qimage_to_array
 import numpy as np
+from openpyxl import Workbook
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
 LOGO_PATH = Path(__file__).parent / "logo.svg"
@@ -75,12 +76,16 @@ class CalibrationBar(QWidget):
 
         self.calc_button = QPushButton("Pixelgröße berechnen")
         self.result_label = QLabel("—")
+        self.result_label.setObjectName("bodyLabel")
         self.result_label.setAlignment(Qt.AlignCenter)
         self.result_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
+        self.strecke_label = QLabel("Strecke:")
+        self.strecke_label.setObjectName("bodyLabel")
+
         row = QHBoxLayout()
         row.addStretch(1)
-        row.addWidget(QLabel("Strecke:"))
+        row.addWidget(self.strecke_label)
         row.addWidget(self.length_edit)
         row.addStretch(1)
 
@@ -105,6 +110,7 @@ class MeasurePanel(QWidget):
     pick_color_requested = Signal()
     tolerance_changed = Signal(int)
     clear_requested = Signal()
+    export_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -149,8 +155,11 @@ class MeasurePanel(QWidget):
             lambda v: (self.tolerance_value.setText(str(v)),
                        self.tolerance_changed.emit(v)))
 
+        self.tolerance_label = QLabel("Toleranz:")
+        self.tolerance_label.setObjectName("bodyLabel")
+
         tol_row = QHBoxLayout()
-        tol_row.addWidget(QLabel("Toleranz:"))
+        tol_row.addWidget(self.tolerance_label)
         tol_row.addWidget(self.tolerance, 1)
         tol_row.addWidget(self.tolerance_value)
 
@@ -174,10 +183,18 @@ class MeasurePanel(QWidget):
         self.clear_button = QPushButton("Flächen löschen")
         self.clear_button.clicked.connect(self.clear_requested)
 
+        self.export_button = QPushButton("Exportieren")
+        self.export_button.clicked.connect(self.export_requested)
+        self.export_button.setEnabled(False)
+
+        button_row = QHBoxLayout()
+        button_row.addWidget(self.clear_button)
+        button_row.addWidget(self.export_button)
+        
         result_box = QGroupBox("Messungen")
         result_layout = QVBoxLayout(result_box)
         result_layout.addWidget(self.table)
-        result_layout.addWidget(self.clear_button)
+        result_layout.addLayout(button_row)
 
         layout = QVBoxLayout(self)
         layout.addWidget(mode_box)
@@ -213,6 +230,9 @@ class MeasurePanel(QWidget):
                 if col > 0:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 self.table.setItem(row, col, item)
+
+        self.export_button.setEnabled(bool(regions))
+
 
 
 class ImageView(QGraphicsView):
@@ -257,14 +277,15 @@ class ImageView(QGraphicsView):
         self._drawing = False
         self._draft: list[QPointF] = []
         self._draft_item = None
-
+        self._source_path = None
+        self._image = None
         
 
     # --- Bild laden -----------------------------------------------------
 
     def set_image(self, image: QImage):
         pixmap = QPixmap.fromImage(image)
-
+        self._image = image
         self._scene.clear()
         self._hint = None
         self._markers.clear()
@@ -316,14 +337,12 @@ class ImageView(QGraphicsView):
         image = reader.read()
         if image.isNull():
             return
+        self._source_path = path
         self.set_image(image)
         event.acceptProposedAction()
 
     # --- Punkte ---------------------------------------------------------
 
-    def set_mode(self, mode: Mode):
-        self._mode = mode
-        self._drawing = False
 
     def mousePressEvent(self, event):
         if event.button() == Qt.RightButton and self._pixmap_item is not None:
@@ -466,7 +485,9 @@ class ImageView(QGraphicsView):
             path.lineTo(self._pixmap_item.mapToScene(QPointF(x, y)))
         path.closeSubpath()
 
-        item = self._scene.addPath(path, QPen(QColor("red"), 0))
+        
+        path.setFillRule(Qt.WindingFill)
+        item = self._scene.addPath(path, QPen(QColor("red"), 0), QBrush(QColor(255, 0, 0, 77)))
         item.setZValue(8)
 
         cx, cy = region.centroid()
@@ -481,6 +502,12 @@ class ImageView(QGraphicsView):
 
 
     #---Hilfsfunktionen ---
+
+    def source_path(self):
+        return self._source_path
+
+    def regions(self):
+        return list(self._regions)
 
     def set_mode(self, mode: Mode):
         self._mode = mode
@@ -537,6 +564,41 @@ class ImageView(QGraphicsView):
         self._picking_color = False
         self.color_picked.emit(rgb)
 
+    # --- Bilde rendern --
+
+    def render_marked_image(self) -> QImage | None:
+        if self._image is None:
+            return None
+        out = self._image.convertToFormat(QImage.Format_ARGB32_Premultiplied)
+        painter = QPainter(out)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        line_width = max(2.0, out.width() / 800.0)
+        font = painter.font()
+        font.setPointSizeF(max(12.0, out.width() / 60.0))
+        font.setBold(True)
+        painter.setFont(font)
+
+        for region in self._regions:
+            path = QPainterPath()
+            path.moveTo(QPointF(*region.contour[0]))
+            for x, y in region.contour[1:]:
+                path.lineTo(QPointF(x, y))
+            path.closeSubpath()
+            path.setFillRule(Qt.WindingFill)
+
+            painter.fillPath(path, QBrush(QColor(255, 0, 0, 77)))
+            painter.setPen(QPen(QColor(255, 0, 0), line_width))
+            painter.drawPath(path)
+
+            cx, cy = region.centroid()
+            painter.setPen(QPen(QColor(255, 0, 0)))
+            painter.drawText(QPointF(cx, cy), str(region.index))
+
+        painter.end()
+        return out
+
+
 class HeaderBar(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -566,7 +628,6 @@ class MainWindow(QWidget):
         self._points = []
         self.scale_x = None
         self.scale_y = None
-
         self.image_view = ImageView(self)
         self.calibration_bar = CalibrationBar(self)
         header = HeaderBar(self)
@@ -576,11 +637,6 @@ class MainWindow(QWidget):
         panel = QVBoxLayout()
         panel.addWidget(self.calibration_bar)
         panel.addWidget(self.measure_panel, 1)
-
-        self.measure_panel.mode_changed.connect(self._on_mode_changed)
-        self.measure_panel.tolerance_changed.connect(self.image_view.set_tolerance)
-        self.measure_panel.clear_requested.connect(self.image_view.clear_regions)
-        self.image_view.regions_changed.connect(self._on_regions_changed)
 
         content = QHBoxLayout()
         content.addLayout(panel, 1)
@@ -602,6 +658,7 @@ class MainWindow(QWidget):
         self.measure_panel.pick_color_requested.connect(self.image_view.start_color_picking)
         self.measure_panel.tolerance_changed.connect(self.image_view.set_tolerance)
         self.measure_panel.clear_requested.connect(self.image_view.clear_regions)
+        self.measure_panel.export_requested.connect(self._export)
 
         self.resize(1980, 1080)
 
@@ -611,6 +668,8 @@ class MainWindow(QWidget):
 
     def _on_regions_changed(self, regions):
         if self.scale_x is None:
+            self.measure_panel.table.setRowCount(0)
+            self.measure_panel.export_button.setEnabled(False)
             return
         self.measure_panel.set_regions(regions, self.scale_x)
 
@@ -644,6 +703,8 @@ class MainWindow(QWidget):
         self.scale_x = self.scale_y = mm_per_px
         self.calibration_bar.result_label.setText(
             f"{mm_per_px * 1000:.2f} µm/px   ({d_px:.1f} px)")
+        self.measure_panel.rb_draw.setEnabled(True)
+        self.measure_panel.rb_color.setEnabled(True)
 
     def _on_region_failed(self):
         QMessageBox.information(
@@ -651,3 +712,57 @@ class MainWindow(QWidget):
             "Der Rand ist an dieser Stelle nicht geschlossen oder die Toleranz "
             "passt nicht. Toleranz anpassen oder näher an die Mitte klicken.")
 
+    # --exportieren---
+    def _export(self):
+            if self.image_view.source_path() is None:
+                QMessageBox.warning(self, "Kein Bild", "Es ist kein Bild geladen.")
+                return
+            if self.scale_x is None:
+                QMessageBox.warning(self, "Nicht kalibriert",
+                                    "Bitte zuerst die Pixelgröße bestimmen.")
+                return
+            regions = self.image_view.regions()
+            if not regions:
+                QMessageBox.warning(self, "Keine Flächen", "Es wurde nichts gemessen.")
+                return
+    
+            src = self.image_view.source_path()
+            image_path = src.with_name(f"{src.stem}_marked.png")
+            table_path = src.with_name(f"{src.stem}_measurements.xlsx")
+    
+            try:
+                marked = self.image_view.render_marked_image()
+                if not marked.save(str(image_path)):
+                    raise OSError(f"Bild konnte nicht geschrieben werden: {image_path}")
+                write_measurements(table_path, regions, self.scale_x, src.name)
+            except (OSError, PermissionError) as exc:
+                QMessageBox.critical(self, "Export fehlgeschlagen", str(exc))
+                return
+    
+            QMessageBox.information(
+                self, "Export abgeschlossen",
+                f"Gespeichert:\n{image_path.name}\n{table_path.name}\n\nin {src.parent}")
+
+
+def write_measurements(path, regions, mm_per_px, image_name):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Messungen"
+
+    ws.append(["Bild", image_name])
+    ws.append(["Pixelgröße (µm)", round(mm_per_px * 1000, 3)])
+    ws.append([])
+    ws.append(["Nr.", "Modus", "Umfang (mm)", "Fläche (mm²)",
+               "Umfang (px)", "Fläche (px²)"])
+
+    for r in regions:
+        ws.append([r.index, r.source,
+                   round(r.perimeter_mm(mm_per_px), 3),
+                   round(r.area_mm2(mm_per_px), 3),
+                   round(r.perimeter_px, 1),
+                   round(r.area_px, 1)])
+
+    for column, width in zip("ABCDEF", (8, 10, 14, 14, 14, 14)):
+        ws.column_dimensions[column].width = width
+
+    wb.save(path)
