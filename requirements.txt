@@ -1,0 +1,3 @@
+Pyside6
+math
+pathlib
