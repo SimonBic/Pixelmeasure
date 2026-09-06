@@ -83,6 +83,7 @@ class CalibrationBar(QWidget):
         self.strecke_label = QLabel("Strecke:")
         self.strecke_label.setObjectName("bodyLabel")
 
+
         row = QHBoxLayout()
         row.addStretch(1)
         row.addWidget(self.strecke_label)
@@ -575,7 +576,7 @@ class ImageView(QGraphicsView):
 
         line_width = max(2.0, out.width() / 800.0)
         font = painter.font()
-        font.setPointSizeF(max(12.0, out.width() / 60.0))
+        font.setPointSizeF(max(6.0, out.width() / 240.0))
         font.setBold(True)
         painter.setFont(font)
 

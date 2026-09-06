@@ -45,7 +45,7 @@ QPushButton:disabled {
 
 QLabel {
     color: #1F2937;
-    font-size: 25px;
+    font-size: 14px;
 }
 
  QScrollBar:vertical {
