@@ -76,6 +76,22 @@ def region_from_seed(rgb: np.ndarray,
     if filled.sum() > 0.9 * h * w:      # ausgelaufen, Rand nicht geschlossen
         return None
 
+    #--- Rand und die Strichstärke mitdazunehmen
+    kernel = np.ones((3, 3), np.uint8)
+    n_labels, labels = cv2.connectedComponents(barrier, connectivity=8)
+    neighbours = cv2.dilate(filled, kernel)
+    touching = np.unique(labels[(neighbours > 0) & (barrier > 0)])
+    touching = touching[touching != 0]
+
+    with_border = filled.copy()
+    for label in touching:
+        with_border[labels == label] = 1
+
+    if with_border.sum() > 3 * filled.sum():
+        with_border = filled          # Rand hängt mit anderen Strichen zusammen
+
+    filled = with_border
+    
     filled = cv2.morphologyEx(filled, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
     contours, _ = cv2.findContours(filled, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     if not contours:
